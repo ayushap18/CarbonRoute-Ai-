@@ -1,0 +1,10 @@
+.git
+.gitignore
+node_modules/
+frontend design/
+docs/
+venv/
+__pycache__/
+*.md
+*.db
+*.log
