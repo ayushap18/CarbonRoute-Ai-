@@ -27,18 +27,54 @@ from compute import process_telemetry, CO2_EMISSION_FACTOR
 from ledger import ledger
 from rag_provider import rag_provider
 from pdf_report import generate_verification_pdf
+from simulator import TruckSimulator, TRUCKS
 
 load_dotenv()
+
+
+async def _run_embedded_simulator():
+    """Run the truck simulator in-process, calling processing directly."""
+    print("[Simulator] Starting embedded simulator with 6 trucks...")
+    simulators = {tid: TruckSimulator(tid, config) for tid, config in TRUCKS.items()}
+    tick = 0
+
+    while True:
+        tick += 1
+        demo_flags = fleet_store.get_demo_flags()
+
+        for tid, sim in simulators.items():
+            data = sim.tick(demo_flags)
+            try:
+                payload = TelemetryPayload(**data)
+                new_state = process_telemetry(payload)
+                ledger.append_record({
+                    "timestamp": payload.timestamp,
+                    "truck_id": payload.truck_id,
+                    "lat": payload.lat,
+                    "lon": payload.lon,
+                    "speed": payload.speed_kmph,
+                    "fuel_rate": payload.fuel_rate_lph,
+                    "load_kg": payload.load_kg,
+                    "co2_kg": new_state.co2_rate_kgph / 3600.0,
+                })
+            except Exception as e:
+                if tick % 30 == 1:
+                    print(f"[Simulator] Error processing {tid}: {e}")
+
+        if tick % 30 == 0:
+            print(f"[Simulator] Tick {tick} - {len(simulators)} trucks active")
+
+        await asyncio.sleep(1.0)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown lifecycle."""
     print("[API] CarbonRoute AI Backend starting...")
-    print("[API] Endpoints available at http://localhost:8000")
-    print("[API] Docs at http://localhost:8000/docs")
+    sim_task = asyncio.create_task(_run_embedded_simulator())
+    print("[API] Embedded simulator started")
     yield
-    # Flush ledger on shutdown
+    sim_task.cancel()
     ledger.force_flush()
     print("[API] Backend shut down. Ledger flushed.")
 
